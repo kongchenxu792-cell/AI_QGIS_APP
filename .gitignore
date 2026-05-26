@@ -1,0 +1,27 @@
+# QGIS Portable Runtime (~2.18 GB, exceeds GitHub 100MB limit)
+qgis-portable/
+
+# Temp files and intermediate outputs
+temp/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini

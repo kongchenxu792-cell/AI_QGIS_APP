@@ -10,6 +10,13 @@ import os
 import sys
 import traceback
 
+# ── PROJ 环境硬编码激活：基于 QGIS portable 标准布局，不再动态巡检 ──
+# 必须在任何 GIS/GDAL 导入前设置 PROJ_LIB/PROJ_DATA，否则 GDAL 初始化会缓存空路径。
+_app_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "qgis-portable")
+_proj_path = os.path.join(_app_path, "share", "proj")
+os.environ.setdefault("PROJ_LIB", _proj_path)      # 旧版 PROJ (<9.x)
+os.environ.setdefault("PROJ_DATA", _proj_path)     # 新版 PROJ (9.x+)
+
 from core.logger import init_logging
 from core.qgis_env import bootstrap_qgis, initialize_processing, shutdown_qgis
 
@@ -39,14 +46,25 @@ def run() -> int:
 
         QgsApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         QgsApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-        QgsApplication.setPrefixPath(
-            bootstrap_result.prefix_path or qgis_prefix_path or "",
-            True,
-        )
         qgs_app = QgsApplication([], True)
         qgs_app.setApplicationName("AI 驱动轻量桌面 GIS")
         qgs_app.setOrganizationName("AI_QGIS_APP")
+
+        # ── 强制修复便携版环境：QGIS 官方接口替代动态巡检 ──
+        def _force_fix_portable_env():
+            app_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "qgis-portable",
+            )
+            QgsApplication.setPrefixPath(app_path, True)
+            os.environ["PROJ_LIB"] = os.path.join(app_path, "share", "proj")
+            os.environ["PROJ_DATA"] = os.path.join(app_path, "share", "proj")
+
+        _force_fix_portable_env()
         qgs_app.initQgis()
+        # initQgis() 内部会基于 prefix_path 重新推算并覆盖 PROJ 路径，立即修复
+        _force_fix_portable_env()
+
         initialize_processing(qgs_app)
 
         main_window = MainWindow(bootstrap_result)

@@ -82,10 +82,20 @@ def discover_qgis_prefix_candidates() -> List[str]:
     if env_prefix:
         candidates.append(normalize_prefix_path(env_prefix))
 
+    # 便携版优先：使用当前脚本所在目录向上搜索
+    script_dir = Path(__file__).parent.parent.parent
+    portable_candidates = [
+        script_dir / "qgis-portable" / "apps" / "qgis-ltr",
+        script_dir / "qgis-portable" / "apps" / "qgis",
+        script_dir / "apps" / "qgis-ltr",
+        script_dir / "apps" / "qgis",
+    ]
+    for candidate in portable_candidates:
+        if candidate.exists():
+            candidates.append(candidate)
+
+    # 系统级安装路径（仅作后备）
     known_paths = [
-        # 独立安装版路径 — 优先于 OSGeo4W
-        Path(r"C:\Program Files\QGIS 3.44.9\apps\qgis-ltr"),
-        Path(r"C:\Program Files\QGIS 3.44.9\apps\qgis"),
         # OSGeo4W 路径
         Path(r"C:\OSGeo4W\apps\qgis"),
         Path(r"C:\OSGeo4W\apps\qgis-ltr"),
@@ -141,6 +151,20 @@ def _prepend_python_path(path: Path) -> None:
             sys.path.insert(0, path_str)
 
 
+def _to_short_path(long_path: str) -> str:
+    """将长路径转换为 Windows 8.3 短路径格式，避免中文编码问题。
+
+    在 Windows 上，PROJ 9.x / GDAL 的 C 运行时可能无法正确处理包含非 ASCII
+    字符的路径。转换为短路径（如 ``D:\\PROJ~1\\SHARE\\PROJ``）可彻底规避。
+    """
+
+    import ctypes
+    buf = ctypes.create_unicode_buffer(512)
+    if ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, 512):
+        return buf.value
+    return long_path
+
+
 def configure_qgis_environment(prefix_path: str | Path) -> str:
     """配置 PyQGIS 导入所需的全部进程环境变量。
 
@@ -176,27 +200,36 @@ def configure_qgis_environment(prefix_path: str | Path) -> str:
     for path_candidate in path_candidates:
         _prepend_env_path(path_candidate)
 
-    gdal_data_path = install_root / "share" / "gdal"
+    gdal_data_paths = [
+        install_root / "share" / "gdal",
+    ]
+    gdal_data_paths.extend(install_root.glob("apps/*/share/gdal"))
+    for gdal_data_path in gdal_data_paths:
+        if gdal_data_path.exists():
+            os.environ["GDAL_DATA"] = _to_short_path(str(gdal_data_path))
+            os.environ["AIQGIS_GDAL_DATA"] = _to_short_path(str(gdal_data_path))
+            break
+
     proj_data_path = install_root / "share" / "proj"
-    if gdal_data_path.exists():
-        os.environ.setdefault("GDAL_DATA", str(gdal_data_path))
     if proj_data_path.exists():
-        proj_data_str = str(proj_data_path)
+        proj_data_str = _to_short_path(str(proj_data_path))
         os.environ["PROJ_DATA"] = proj_data_str  # PROJ 9.x uses PROJ_DATA
         os.environ["PROJ_LIB"] = proj_data_str   # GDAL 向后兼容 PROJ_LIB
+        os.environ["AIQGIS_PROJ_DATA"] = proj_data_str  # initQgis 后恢复用
     else:
         # 回退：全局搜索 proj.db
         for candidate in install_root.rglob("proj.db"):
-            proj_data_str = str(candidate.parent)
+            proj_data_str = _to_short_path(str(candidate.parent))
             os.environ["PROJ_DATA"] = proj_data_str
             os.environ["PROJ_LIB"] = proj_data_str
+            os.environ["AIQGIS_PROJ_DATA"] = proj_data_str
             break
 
     return str(normalized_prefix)
 
 
 def initialize_processing(qgs_app) -> None:
-    """初始化 QGIS 处理框架，使 ``processing.run()`` 可正常调用。
+    """初始化 QGIS 处理框架，完整注册所有核心算法提供者。
 
     参数
     ----
@@ -209,14 +242,50 @@ def initialize_processing(qgs_app) -> None:
     if _PROCESSING_INITIALIZED:
         return
 
+    import logging
+    _log = logging.getLogger("qgis_env")
+
     from qgis.analysis import QgsNativeAlgorithms  # type: ignore
     from processing.core.Processing import Processing  # type: ignore
 
     Processing.initialize()
 
-    provider_ids = {provider.id() for provider in qgs_app.processingRegistry().providers()}
+    registry = qgs_app.processingRegistry()
+    provider_ids = {provider.id() for provider in registry.providers()}
+
+    # native: 命名空间 — 基础矢量/栅格算子（必装）
     if "native" not in provider_ids:
-        qgs_app.processingRegistry().addProvider(QgsNativeAlgorithms())
+        registry.addProvider(QgsNativeAlgorithms())
+        _log.info("已注册 native: 算子提供者")
+
+    # qgis: 命名空间 — 高级分析算子（核密度、插值、网络分析等）
+    if "qgis" not in provider_ids:
+        try:
+            from processing.algs.qgis.QgisAlgorithmProvider import QgisAlgorithmProvider
+            registry.addProvider(QgisAlgorithmProvider())
+            _log.info("已注册 qgis: 算子提供者（核密度/插值等高级分析）")
+        except Exception as exc:
+            _log.warning("无法注册 qgis: 算子提供者：%s", exc)
+
+    # gdal: 命名空间 — GDAL 栅格处理算子
+    if "gdal" not in provider_ids:
+        try:
+            from processing.algs.gdal.GdalAlgorithmProvider import GdalAlgorithmProvider
+            registry.addProvider(GdalAlgorithmProvider())
+            _log.info("已注册 gdal: 算子提供者")
+        except Exception as exc:
+            _log.warning("无法注册 gdal: 算子提供者：%s", exc)
+
+    # 统计已注册算子总量
+    all_alg_ids = [alg.id() for alg in registry.algorithms()]
+    has_qgis_kde = "qgis:kerneldensityestimation" in all_alg_ids
+    has_native_heatmap = "native:heatmap" in all_alg_ids
+    _log.info(
+        "处理框架初始化完成，算子总数: %s | qgis:kerneldensityestimation=%s | native:heatmap=%s",
+        len(all_alg_ids),
+        has_qgis_kde,
+        has_native_heatmap,
+    )
 
     _PROCESSING_INITIALIZED = True
 

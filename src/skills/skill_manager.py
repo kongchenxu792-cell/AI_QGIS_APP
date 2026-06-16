@@ -38,7 +38,6 @@ class SkillManager:
                     ):
                         instance = attr()
                         self._skills[instance.get_name()] = instance
-                        break
             except Exception as e:
                 print(f"[SkillManager] 加载 {module_name} 失败: {e}")
 
@@ -110,12 +109,45 @@ class SkillManager:
         if not skill:
             return {"success": False, "message": f"未知技能：{name}"}
         try:
-            return skill.execute(
+            # Phase 5：GeoAgent 空间拦截防御卫士
+            # 前置防御：参数修正
+            from .geoagent_guard import geoagent_pre_execution_guard
+            # 提取技能参数（部分技能内部会解析 arguments）
+            # 这里我们假设技能内部会调用 processing.run，卫士在技能内部执行前介入
+            # 我们将在 skill.execute 内部调用卫士，因此这里仅传递参数
+            
+            # 执行技能
+            result = skill.execute(
                 canvas=canvas,
                 layer_tree=layer_tree,
                 arguments=arguments,
                 **kwargs,
             )
+            
+            # 后置防御：类型安全
+            from .geoagent_guard import geoagent_post_execution_guard
+            if "layer" in result:
+                result["layer"] = geoagent_post_execution_guard(
+                    result["layer"], 
+                    display_name=kwargs.get("display_name", "图层结果")
+                )
+            if "added_layers" in result:
+                result["added_layers"] = [
+                    geoagent_post_execution_guard(layer, f"图层{i+1}")
+                    for i, layer in enumerate(result["added_layers"])
+                ]
+            if "styled_layers" in result:
+                result["styled_layers"] = [
+                    geoagent_post_execution_guard(layer, layer.name())
+                    for layer in result["styled_layers"]
+                ]
+            if "loaded_layers" in result:
+                result["loaded_layers"] = [
+                    geoagent_post_execution_guard(layer, layer.name())
+                    for layer in result["loaded_layers"]
+                ]
+            
+            return result
         except Exception as e:
             return {"success": False, "message": f"技能执行异常：{e}"}
 

@@ -33,9 +33,22 @@ RASTER_EXTENSIONS = {
     ".png",
 }
 
+#: 支持的表格数据文件扩展名集合（Excel/CSV）。
+TABLE_EXTENSIONS = {
+    ".xlsx",
+    ".xls",
+    ".csv",
+}
+
+#: QGIS 项目文件扩展名集合。
+PROJECT_EXTENSIONS = {".qgz", ".qgs"}
+
+#: 所有支持拖放加载的扩展名并集。
+ALL_SUPPORTED_EXTENSIONS = VECTOR_EXTENSIONS | RASTER_EXTENSIONS | TABLE_EXTENSIONS | PROJECT_EXTENSIONS
+
 
 def is_supported_path(file_path: str) -> bool:
-    """判断给定文件路径是否为可拖放加载的 GIS 数据格式。
+    """判断给定文件路径是否为可拖放加载的 GIS 数据或项目格式。
 
     参数
     ----
@@ -45,10 +58,27 @@ def is_supported_path(file_path: str) -> bool:
     返回
     ----
     bool
-        若文件扩展名在支持的矢量或栅格格式范围内则返回 ``True``。
+        若文件扩展名在支持的格式范围内则返回 ``True``。
     """
 
-    return Path(file_path).suffix.lower() in VECTOR_EXTENSIONS | RASTER_EXTENSIONS
+    return Path(file_path).suffix.lower() in ALL_SUPPORTED_EXTENSIONS
+
+
+def is_table_path(file_path: str) -> bool:
+    """判断给定文件路径是否为表格数据文件（Excel/CSV）。
+
+    参数
+    ----
+    file_path : str
+        待检测的文件路径。
+
+    返回
+    ----
+    bool
+        若文件扩展名属于表格格式则返回 ``True``。
+    """
+
+    return Path(file_path).suffix.lower() in TABLE_EXTENSIONS
 
 
 def create_layer_from_path(file_path: str):
@@ -92,6 +122,9 @@ def create_layer_from_path(file_path: str):
 def load_layers_from_paths(file_paths: Iterable[str]) -> Tuple[List[object], List[str]]:
     """批量加载文件路径并将其注册到当前 QGIS 项目中。
 
+    对于矢量/栅格图层文件调用 create_layer_from_path 添加到当前项目；
+    对于 .qgz/.qgs 项目文件调用 QgsProject.read()，由 QGIS 原生引擎处理。
+
     参数
     ----
     file_paths : Iterable[str]
@@ -108,6 +141,15 @@ def load_layers_from_paths(file_paths: Iterable[str]) -> Tuple[List[object], Lis
 
     for file_path in file_paths:
         try:
+            suffix = Path(file_path).suffix.lower()
+
+            if suffix in PROJECT_EXTENSIONS:
+                # 交给 QGIS 原生读取引擎，项目内的图层由 QGIS 自己管理
+                QgsProject.instance().read(file_path)
+                for layer in QgsProject.instance().mapLayers().values():
+                    loaded_layers.append(layer)
+                continue
+
             if not is_supported_path(file_path):
                 errors.append(f"已跳过不支持的文件：{file_path}")
                 continue

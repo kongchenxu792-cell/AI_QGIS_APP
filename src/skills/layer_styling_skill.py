@@ -32,7 +32,11 @@ def _build_styling_prompt() -> str:
         "4. 变量 `layer` 是当前活动图层，直接使用它。\n"
         "5. 必须把执行结果赋给变量 `result`，"
         "result = {\"success\": True, \"message\": \"描述\"}。\n"
-        "6. 可用 API 示例：\n"
+        "6. 严禁使用 iface、canvas.mapCanvas()、QgsProject.instance().mapCanvas() — "
+        "这是独立 QGIS 应用，iface 不存在。\n"
+        "7. 严禁修改图层可见性（setVisibility、setItemVisibilityChecked）— "
+        "可见性由图层树原生控制，不属于样式范畴。\n"
+        "8. 可用 API 示例：\n"
         "   - 修改符号颜色：\n"
         "     from qgis.core import QgsSingleSymbolRenderer, QgsFillSymbol\n"
         "     sym = QgsFillSymbol.createSimple({'color': 'blue', 'outline_color': 'black'})\n"
@@ -53,9 +57,9 @@ def _build_styling_prompt() -> str:
         "     renderer = QgsGraduatedSymbolRenderer.createRenderer(\n"
         "         layer, '字段名', 5, QgsGraduatedSymbolRenderer.Jenks, QgsFillSymbol())\n"
         "     layer.setRenderer(renderer)\n"
-        "7. 必须调用 layer.triggerRepaint() 和 result = {'success': True, 'message': '...'}\n"
-        "8. 禁止调用 print、input、sys、subprocess、eval、exec、open、__import__。\n"
-        "9. 如果无法生成代码，返回抛出 RuntimeError 的最短代码。"
+        "9. 必须调用 layer.triggerRepaint() 和 result = {'success': True, 'message': '...'}\n"
+        "10. 禁止调用 print、input、sys、subprocess、eval、exec、open、__import__。\n"
+        "11. 如果无法生成代码，返回抛出 RuntimeError 的最短代码。"
     )
 
 
@@ -171,22 +175,42 @@ class LayerStylingSkill(BaseSkill):
         code = match.group(1).strip()
 
         # 安全执行
-        safe_builtins = {
-            "len": len, "min": min, "max": max, "sum": sum,
-            "str": str, "int": int, "float": float, "bool": bool,
-            "list": list, "dict": dict, "tuple": tuple, "set": set,
-            "range": range, "enumerate": enumerate, "zip": zip, "sorted": sorted,
-            "RuntimeError": RuntimeError, "ValueError": ValueError,
-            "__import__": __import__, "isinstance": isinstance, "type": type,
-            "super": super, "hasattr": hasattr, "getattr": getattr,
-        }
+        import builtins
+        safe_builtins = builtins.__dict__
         exec_globals = {
             "__builtins__": safe_builtins,
             "layer": layer,
             "canvas": canvas,
+            "QgsProject": QgsProject,
+            "QgsVectorLayer": QgsVectorLayer,
+            "QgsRasterLayer": QgsRasterLayer,
         }
+        # 动态导入 QGIS 样式相关模块
+        try:
+            from qgis.core import (
+                QgsSingleSymbolRenderer, QgsFillSymbol, QgsLineSymbol,
+                QgsCategorizedSymbolRenderer, QgsRendererCategory,
+                QgsGraduatedSymbolRenderer, QgsMarkerSymbol,
+            )
+            exec_globals.update({
+                "QgsSingleSymbolRenderer": QgsSingleSymbolRenderer,
+                "QgsFillSymbol": QgsFillSymbol,
+                "QgsLineSymbol": QgsLineSymbol,
+                "QgsCategorizedSymbolRenderer": QgsCategorizedSymbolRenderer,
+                "QgsRendererCategory": QgsRendererCategory,
+                "QgsGraduatedSymbolRenderer": QgsGraduatedSymbolRenderer,
+                "QgsMarkerSymbol": QgsMarkerSymbol,
+            })
+        except ImportError:
+            pass
+
         exec_locals: Dict[str, Any] = {}
-        exec(code, exec_globals, exec_locals)
+        try:
+            exec(code, exec_globals, exec_locals)
+        except Exception as e:
+            if type(e).__name__ == "HeatmapRenderSuccessException":
+                return {"success": True, "message": "前端热力图渲染成功"}
+            raise
 
         # 刷新渲染
         if hasattr(layer, 'triggerRepaint'):

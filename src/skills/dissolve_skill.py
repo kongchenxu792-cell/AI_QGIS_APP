@@ -2,13 +2,16 @@
 融合技能 — 封装 QGIS native:dissolve 算法。
 
 将具有相同字段值的相邻多边形合并为一个多边形。
+结果持久化到 output/shapefiles/，应用重启后数据不丢失。
 """
 
+import os
 from typing import Any, Dict, List
 
 from qgis.core import QgsProject, QgsVectorLayer, QgsMapLayer
 
 from skills.base_skill import BaseSkill
+from core.output_persistence import generate_output_path
 
 
 class DissolveSkill(BaseSkill):
@@ -50,9 +53,12 @@ class DissolveSkill(BaseSkill):
             if idx >= 0:
                 dissolve_field = field_name
 
+        # 持久化输出路径
+        output_path = generate_output_path("dissolve", input_layer.name())
+
         params = {
             "INPUT": input_layer,
-            "OUTPUT": "TEMPORARY_OUTPUT",
+            "OUTPUT": output_path,
         }
         if dissolve_field is not None:
             params["FIELD"] = [dissolve_field]
@@ -73,4 +79,6 @@ class DissolveSkill(BaseSkill):
             "success": True,
             "message": f"融合完成：{input_layer.name()} → {new_name}",
             "added_layers": added,
+            "output_path": output_path,
+            "output_layer_name": new_name,
         }

@@ -19,7 +19,7 @@ def _get_log_dir() -> Path:
     module_dir = Path(__file__).resolve().parent  # core/
     src_dir = module_dir.parent                    # src/
     project_root = src_dir.parent                  # 项目根
-    log_dir = project_root / "logs"
+    log_dir = project_root / "user_data" / "logs"
     log_dir.mkdir(exist_ok=True)
     return log_dir
 

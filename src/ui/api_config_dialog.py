@@ -32,10 +32,12 @@ class ApiConfigDialog(QDialog):
             - api_key: str
             - base_url: str
             - model_name: str
+            - local_model_url: str
+            - local_model_name: str
         """
         super().__init__(parent)
         self.setWindowTitle("AI API 配置")
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(520)
         self.setModal(True)
 
         self.current_config = current_config or {}
@@ -47,7 +49,7 @@ class ApiConfigDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setSpacing(16)
 
-        # API 设置组
+        # ── API 设置组 ──
         api_group = QGroupBox("DeepSeek API 设置")
         form_layout = QFormLayout(api_group)
 
@@ -69,16 +71,44 @@ class ApiConfigDialog(QDialog):
 
         layout.addWidget(api_group)
 
+        # ── 本地模型设置组 ──
+        local_group = QGroupBox("本地大模型设置（离线模式）")
+        local_form = QFormLayout(local_group)
+
+        self.local_url_edit = QLineEdit()
+        self.local_url_edit.setPlaceholderText("http://localhost:11434/v1")
+        local_form.addRow("本地模型地址:", self.local_url_edit)
+
+        self.local_model_edit = QLineEdit()
+        self.local_model_edit.setPlaceholderText("qwen2.5:7b")
+        local_form.addRow("模型名称:", self.local_model_edit)
+
+        layout.addWidget(local_group)
+
         # 说明标签
         note = QLabel(
             "提示：\n"
             "• API Key 可从 DeepSeek 控制台获取\n"
             "• Base URL 通常为 https://api.deepseek.com/v1\n"
-            "• 模型名称默认为 deepseek-chat"
+            "• 模型名称默认为 deepseek-chat\n"
+            "• 离线模式使用本地大模型（Ollama/LM Studio），默认端口 11434"
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: #666; font-size: 12px;")
         layout.addWidget(note)
+
+        # ── 测试连接按钮 ──
+        self.test_btn = QPushButton("测试本地模型连接")
+        self.test_btn.setStyleSheet("""
+            QPushButton {
+                background: #6b7280; color: #ffffff; border: none;
+                border-radius: 8px; font-weight: 600; padding: 6px 16px;
+                min-width: auto; min-height: auto;
+            }
+            QPushButton:hover { background: #4b5563; }
+        """)
+        self.test_btn.clicked.connect(self._test_local_connection)
+        layout.addWidget(self.test_btn)
 
         # 按钮行
         button_layout = QHBoxLayout()
@@ -104,6 +134,8 @@ class ApiConfigDialog(QDialog):
             self.api_key_edit.setText(self.current_config.get("api_key", ""))
             self.base_url_edit.setText(self.current_config.get("base_url", ""))
             self.model_edit.setText(self.current_config.get("model_name", ""))
+            self.local_url_edit.setText(self.current_config.get("local_model_url", ""))
+            self.local_model_edit.setText(self.current_config.get("local_model_name", ""))
 
     def _validate_and_accept(self) -> None:
         """验证输入并接受对话框。"""
@@ -132,8 +164,29 @@ class ApiConfigDialog(QDialog):
             "api_key": api_key,
             "base_url": base_url,
             "model_name": model_name,
+            "local_model_url": self.local_url_edit.text().strip(),
+            "local_model_name": self.local_model_edit.text().strip(),
         }
         self.accept()
+
+    def _test_local_connection(self) -> None:
+        """测试本地大模型连通性。"""
+        url = self.local_url_edit.text().strip() or "http://localhost:11434/v1"
+        model = self.local_model_edit.text().strip() or "qwen2.5:7b"
+
+        try:
+            from core.local_llm import LocalLLMClient
+            client = LocalLLMClient(base_url=url, model=model, timeout=5)
+            if client.test_connection():
+                QMessageBox.information(self, "连接成功", "本地大模型服务连接正常。")
+            else:
+                QMessageBox.warning(
+                    self,
+                    "连接失败",
+                    "无法连接到本地大模型服务。\n请确认 Ollama / LM Studio 是否已启动，且端口配置正确。",
+                )
+        except Exception as e:
+            QMessageBox.warning(self, "测试异常", f"测试连接时发生错误：\n{e}")
 
     @classmethod
     def get_config(cls, parent=None, current_config=None):
